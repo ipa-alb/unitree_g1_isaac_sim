@@ -50,12 +50,44 @@ except FileNotFoundError:
 
 **Impact**: External processes (like our orchestration script) couldn't find the shared memory because the actual name was something like `psm_abc123` instead of `dds_robot_cmd`.
 
+### 2. Python resource tracker destroys shared memory on script exit
+
+**File**: `orchestrate/do.py`
+
+**Problem**: Python's `multiprocessing.shared_memory` registers every opened segment with a resource tracker. When our short-lived CLI script exits, the tracker **unlinks (destroys)** the segment — even though the sim still needs it. The first `do.py` call works, the second fails because the shm was deleted.
+
+```python
+# FIX: unregister from the tracker immediately after opening
+from multiprocessing import resource_tracker
+
+def _untrack_shm(name: str):
+    try:
+        resource_tracker.unregister(f"/{name}", "shared_memory")
+    except Exception:
+        pass
+```
+
+**Impact**: Without this fix, the first command works but every subsequent command fails with `shm not found`. This is a well-known Python footgun with `shared_memory` across processes.
+
+### 3. Teleimager DEBUG log spam floods the sim terminal
+
+**File**: `sim_main.py`
+
+**Problem**: The teleimager image server logs every camera frame at DEBUG level (~30Hz), making the sim terminal unreadable.
+
+```python
+# FIX: suppress before importing
+import logging
+logging.getLogger("teleimager").setLevel(logging.WARNING)
+from teleimager.image_server import run_isaacsim_server
+```
+
 ## Key Timing Details
 
 - The sim takes **30-60 seconds** to fully initialize (shader compilation, scene creation, DDS setup)
 - Shared memory segments only exist **after** `"create dds success"` appears in the sim log
 - Camera shared memory (`isaac_*_image_shm`) is created earlier than DDS shared memory
-- The `"Please left-click on the Sim window"` message is informational — the sim does not block there
+- The `"Please left-click on the Sim window"` is **not** just informational — the sim may block on rendering until you click the window
 
 ## Arm Joint Mapping
 
@@ -89,9 +121,9 @@ The sim creates three cameras, but their shared memory names differ from their s
 | `left_wrist_camera` | `isaac_left_image_shm` |
 | `right_wrist_camera` | `isaac_right_image_shm` |
 
-## Debug Spam
+## Debug Spam (Fixed)
 
-The teleimager `image_server.py` produces very verbose DEBUG-level output (`head_camera - concatenated binocular frame`). This is cosmetic but obscures useful log output. Can be suppressed by adjusting the logging level in the teleimager config.
+The teleimager `image_server.py` produces very verbose DEBUG-level output (`head_camera - concatenated binocular frame`). Fixed by setting `logging.getLogger("teleimager").setLevel(logging.WARNING)` in `sim_main.py` before importing the image server.
 
 ## What's Next
 

@@ -37,7 +37,15 @@ import time
 import struct
 import ctypes
 import argparse
-from multiprocessing import shared_memory
+from multiprocessing import shared_memory, resource_tracker
+
+
+def _untrack_shm(name: str):
+    """Stop Python's resource tracker from destroying shared memory we don't own."""
+    try:
+        resource_tracker.unregister(f"/{name}", "shared_memory")
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Shared memory helpers (matching the sim's format exactly)
@@ -48,6 +56,7 @@ def shm_read_json(name: str):
     4-byte timestamp, 4-byte length, then JSON bytes)."""
     try:
         shm = shared_memory.SharedMemory(name=name)
+        _untrack_shm(name)
     except FileNotFoundError:
         return None, f"shm '{name}' not found (is the sim running?)"
     try:
@@ -69,6 +78,7 @@ def shm_write_json(name: str, data: dict, size: int = 3072):
     """Write JSON data to a named shared memory segment."""
     try:
         shm = shared_memory.SharedMemory(name=name)
+        _untrack_shm(name)
     except FileNotFoundError:
         print(f"ERROR: shm '{name}' not found — is the sim running?")
         return False
@@ -108,6 +118,7 @@ def read_camera(cam_name: str, save_path: str | None = None):
     shm_name = f"isaac_{cam_name}_image_shm"
     try:
         shm = shared_memory.SharedMemory(name=shm_name)
+        _untrack_shm(shm_name)
     except FileNotFoundError:
         print(f"Camera shm '{shm_name}' not found")
         return None
